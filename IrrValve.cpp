@@ -16,4 +16,11 @@ IrrValve::IrrValve()
 
 
 
+boolean IrrValve::registerEvent(int relay_number, int duration, int event_id, IrrEvent* event_pointer)
+{
+
+
+}
+
+
 

@@ -5,9 +5,10 @@
 */
 
 #include "Arduino.h"
-#include "IrrEvent.h"
 #include <timeLib.h>
 #include <SD.h>
+#include "IrrEvent.h"
+#include "IrrValve"
 
 #define DEBUG
 
@@ -38,10 +39,15 @@ IrrEvent::IrrEvent()
   event_running            = 0;
   interval_active          = 0;
   duration_countdown       = 0;
-  interval_len_countdown   = 0;
-  interval_pause_countdown = 0;
+  interval_run_start       = 0;
+  interval_pause_start     = 0;
 }
 
+
+void IrrEvent::setID(int uid)
+{
+	unique_event_id = uid;
+}
 
 
 void IrrEvent::setRelay(int relay)        // set relay number
@@ -78,25 +84,33 @@ void IrrEvent::setStartDays(boolean *d)             // [1001010] set on which we
 
 int IrrEvent::setScheduled(boolean scheduled)    // 0: exclude from schedule, 1: execute this event when due
 {
-  event_scheduled = scheduled;
-
   // cancel running processes if event was removed from schedule
-  if(!event_scheduled)
+  if(!scheduled)
   {
-    event_paused             = 0;
-    event_finished           = 0;
-    event_running            = 0;
-    duration_countdown       = 0;
-    interval_len_countdown   = 0;
-    interval_pause_countdown = 0;
+	  event_status = EVENT_REMOVED_FROM_SCHEDULE;
+	  cycle_status = CYCLE_INACTIVE;
+	  duration_countdown       = 0;  // when event is taken from schedule, it will not resume when put back on the same day
 
     DEBUG_PRINTLN("removed event from schedule");
     return EVENT_REMOVED_FROM_SCHEDULE;
   }
+  
+  // put event on schedule
   else 
   {
-    DEBUG_PRINTLN("put event on schedule");
-    return EVENT_REGISTERED_INTO_SCHEDULE;
+	  if (duration_countdown > 0) 
+	  { 
+		  event_status = EVENT_ON_SCHEDULE; 
+	  }
+	  else 
+	  {
+		  event_status = EVENT_FINISHED;
+	  }
+	  
+	  cycle_status = CYCLE_INACTIVE;
+
+	DEBUG_PRINTLN("put event on schedule");
+	return EVENT_ON_SCHEDULE;
   }
 }
 
@@ -146,50 +160,112 @@ void IrrEvent::resetEvent()                       // set all states and variable
 
 int IrrEvent::process(IrrValve* valveControl)      // check if it's this events turn and execute
 {
-  
-  // check for aboard conditions ***************************************************************
-  if(!event_scheduled) 
-  { 
-    DEBUG_PRINTLN(String("event ") + String(relay_number) + String(" not scheduled"));
-    return EVENT_NOT_SCHEDULED; 
-  }
-  if(event_finished) 
-  {   
-    DEBUG_PRINTLN(String("event ") + String(relay_number) + String(" has finished already"));
-    return EVENT_FINISHED; 
-  }
-  if(event_paused) 
-  {     
-    DEBUG_PRINTLN(String("event ") + String(relay_number) + String(" is paused"));
-    return EVENT_PAUSED; 
-  }
+	boolean result;
 
-  // check if event is due ********************************************************************
+
+  // check for aboard/idle conditions **********************************************************
+  if(event_status == EVENT_REMOVED_FROM_SCHEDULE || 
+	 event_status == EVENT_FINISHED ||
+	 event_status == EVENT_PAUSED) 
+  { 
+    DEBUG_PRINTLN(String("event of valve ") + String(relay_number) + String(" not executed, status=" + String(event_status)));
+    return event_status; 
+  }
+  
+  /* activate event if it is due and not finised or activated already. *************************
+  */
   float calcTimeEvent = start_time_hour + (float)start_time_min/60;
   float calcTimeNow   = (float)hour() + (float)minute()/60;
-  
-  DEBUG_PRINTLN(String(calcTimeNow) + String(" == ") + String(calcTimeEvent));
-  
-  if(calcTimeNow >= calcTimeEvent && !event_running)
+  DEBUG_PRINTLN(String(calcTimeNow) + String(" ? ") + String(calcTimeEvent));
+
+  if (calcTimeNow >= calcTimeEvent &&
+	  event_status != EVENT_RUNNING)
   {
-    duration_countdown = duration;
-    event_running = 1;
-    DEBUG_PRINTLN("event is due. set duration countdown = " + String(duration));
+	  duration_countdown = duration;
+	  event_status = EVENT_RUNNING;
+	  DEBUG_PRINTLN("event is due. set duration countdown = " + String(duration));
   }
 
-  
-  // check if event is running already ********************************************************
+  /* Try to start relay if event is supposed to run. 
+     try again next iteration if another event is blocking the valve control.
+     this happens at first cycle                             */
+  if(event_status == EVENT_RUNNING &&
+	 cycle_status == CYCLE_INACTIVE)
+  {
+	 // try to register event at valve control
+	 result = valveControl->registerEvent(relay_number, interval_len, unique_event_id, this);
 
-
+	 // if vavle control returns successfully, start counting
+	 if (result) 
+	 { 
+		 cycle_status = CYCLE_INTERVAL_RUN; 
+		 duration_countdown -= interval_len;
+	 }
+	 else { cycle_status = CYCLE_INACTIVE; }
+  }
   
 
-  
-  
-  
-  
-  
+  /* if event is running and cycle is on pause, check if the next cycle is due
+      This happens if the interval is shorter than duration and one or more cycles
+	  finished already */
+  if (event_status == EVENT_RUNNING &&
+	  cycle_status == CYCLE_INTERVAL_PAUSE)
+  {
+	 // interval pause completed?
+	  if ((long)(millis() - interval_pause_restart_time) >= 0)
+	 {
+		 // try to register event at valve control
+		  if (duration_countdown >= interval_len) 
+			{ result = valveControl->registerEvent(relay_number, interval_len, unique_event_id, this); }
+		 else
+			{ result = valveControl->registerEvent(relay_number, duration_countdown, unique_event_id, this); }
+
+		 // if regitration was successful
+		  if (result) {
+			  cycle_status = CYCLE_INTERVAL_RUN;
+
+			  if (duration_countdown >= interval_len) 
+			 { 
+				 duration_countdown -= interval_len; 
+			 }
+			 else 
+			 { 
+				 duration_countdown = 0; 
+			 }
+		 }
+	 }
+  }
   return 0;
 }
+
+
+
+/* this method is called by valve control if the present cycle has finished
+   depending on the the duration_countdown time left will either a cycle pause
+   be started or the event is marked finished.
+*/
+void IrrEvent::cycleFinished()
+{
+	// all cycles finished, 'duration' has passed fully
+	if (duration_countdown <= 0)
+	{
+		DEBUG_PRINTLN("last cycle finished -> EVENT_FINISHED and CYCLE_INACTIVE");
+		event_status = EVENT_FINISHED;
+		cycle_status = CYCLE_INACTIVE;
+		duration_countdown = duration;
+	}
+	
+	// if at least another cycle has to be run to complete 'duration' fully
+	else
+	{
+		DEBUG_PRINTLN("cycle finished -> CYCLE_INTERVAL_PAUSE");
+
+		cycle_status = CYCLE_INTERVAL_PAUSE;
+		interval_pause_restart_time = millis() + interval_pause * 1000;
+	}
+}
+
+
 
 
 
@@ -215,7 +291,7 @@ boolean IrrEvent::saveEventToSD(char* fname)
   sprintf(entry, "[duration=%i]",duration); myFile.println(entry);  
   sprintf(entry, "[interval_len=%i]",interval_len); myFile.println(entry);
   sprintf(entry, "[interval_pause=%i]",interval_pause); myFile.println(entry);
-  sprintf(entry, "[event_scheduled=%i]",event_scheduled); myFile.println(entry);
+  //sprintf(entry, "[event_status=%i]",event_status); myFile.println(entry);
   sprintf(entry, "[interval_active=%i]",interval_active); myFile.println(entry);
     
   myFile.close();
@@ -262,6 +338,9 @@ boolean IrrEvent::readEventFromSD(char* fname)
     }
   }
   DEBUG_PRINTLN("SD card settings imported");
+  event_status = EVENT_REMOVED_FROM_SCHEDULE;
+  cycle_status = CYCLE_INACTIVE;
+  duration_countdown = 0;
 }
 
 
@@ -301,7 +380,7 @@ void IrrEvent::extractSD(String *txtLine)
   if(var.equalsIgnoreCase("relay_number")) relay_number = val.toInt();
   if(var.equalsIgnoreCase("interval_len")) interval_len = val.toInt();
   if(var.equalsIgnoreCase("interval_pause")) interval_pause = val.toInt();
-  if(var.equalsIgnoreCase("event_scheduled")) event_scheduled = val.toInt();
+  //if(var.equalsIgnoreCase("event_status")) event_status = val.toInt();
   if(var.equalsIgnoreCase("interval_active")) interval_active = val.toInt();
 }
 

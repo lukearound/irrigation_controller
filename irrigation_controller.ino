@@ -16,12 +16,15 @@
   #define DEBUG_PRINT(x)
 #endif
 
+#define N_EVENT_MAX 12
+
+
 
 int relayPinN = 3;             // number of attached relays
 int relayPin[] = {5, 6, 7};    // digitalPin numbers linked to the attached relays
 
 IrrValve* valveControl;   // handles all valve operations, triggered by IrrEvents
-IrrEvent  event[12];       // 4 events per 3 relays
+IrrEvent  event[N_EVENT_MAX];       // 4 events per 3 relays
 
 
 
@@ -55,8 +58,11 @@ void setup() {
   else
       DEBUG_PRINTLN("RTC has set the system time");  
 
+  // assign id number to each event
+  for (int n=0; n<N_EVENT_MAX; n++) { event[n].setID(n); }
+
   /* initialize all events with relay number and name
-     four events are reserved per valve/relay             */
+  four events are reserved per valve/relay             */
   for(int n=0; n<3; n++)
   {
     for(int m=0; m<4; m++)

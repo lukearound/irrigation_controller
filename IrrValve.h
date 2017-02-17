@@ -8,12 +8,14 @@
 #define IrrValve_h
 
 #include "Arduino.h"
+#include "IrrEvent.h"
 
 
 class IrrValve
 {
   public:
     IrrValve();
+	boolean registerEvent(int relay_number, int duration, int event_id, IrrEvent* event_pointer);
     
     
   private:

@@ -12,11 +12,21 @@
 #include <SD.h>
 
 
-#define EVENT_NOT_SCHEDULED 0
-#define EVENT_FINISHED 1
-#define EVENT_PAUSED 2
-#define EVENT_REMOVED_FROM_SCHEDULE 3
-#define EVENT_REGISTERED_INTO_SCHEDULE 4
+#define EVENT_REMOVED_FROM_SCHEDULE 0
+#define EVENT_ON_SCHEDULE           1
+#define EVENT_RUNNING               2
+#define EVENT_PAUSED                3
+#define EVENT_FINISHED              4
+
+
+//
+//#define EVENT_REGISTERED_INTO_SCHEDULE 4
+
+#define CYCLE_INACTIVE       0
+#define CYCLE_INTERVAL_RUN   1
+#define CYCLE_INTERVAL_PAUSE 2
+
+
 
 
 
@@ -25,7 +35,8 @@ class IrrEvent
 {
   public:
     IrrEvent();
-    void setRelay(int relay);                // set relay number
+	void setID(int uid);                     // each event needs a unique ID
+	void setRelay(int relay);                // set relay number
     void setStartTime(int h, int m);         // set new start time
     void setDuration(int m);                 // [mins ]set how long this valve has to release water
     void setStartDays(boolean *d);           // [1001010] set on which week days this event should be active
@@ -36,7 +47,8 @@ class IrrEvent
     void setIntervalActive(boolean active);  // 0: intverval length is ignored, 1: interval length is considered
     void setNextDay();                       // the next day has started -> reset finish event flag
     void resetEvent();                       // set all states and variables to default
-    int  process(IrrValve* valveControl);     // check if it's this events turn and execute
+    int  process(IrrValve* valveControl);    // check if it's this events turn and execute
+	void cycleFinished();                    // to be called by valve control if cycle time has passed
     boolean saveEventToSD(char* fname);
     boolean readEventFromSD(char* fname);
     
@@ -44,27 +56,25 @@ class IrrEvent
 
     void extractSD(String *txtLine);
   
+	int unique_event_id;
     int relay_number;
-    int parallel_permission;
+    int parallel_permission;  // for future use
     
-    boolean start_days[7];
-    int start_time_hour;
-    int start_time_min;
-    int duration;
-    int interval_len;
-    int interval_pause;
+    boolean start_days[7];    // [1,0,0,1,0,0,0]  / [su, mo, tu, we, th, fr, sa]
+    int start_time_hour;      // [hr]
+    int start_time_min;       // [min]
+    int duration;             // [sec]
+    int interval_len;         // [sec]
+    int interval_pause;       // [sec]
+	int inverval_active;
 
-    boolean event_scheduled;
-    boolean event_paused;
-    boolean event_finished;
-    boolean event_running;
-    boolean interval_active;
+	int event_status;
+	int cycle_status;
 
-    int duration_countdown;
-    int interval_len_countdown;
-    int interval_pause_countdown;
+    int duration_countdown;                       // [sec]
+	unsigned long interval_pause_restart_time;    // [msec]
 
-    File myFile;
+	File myFile;
 };
 
 
